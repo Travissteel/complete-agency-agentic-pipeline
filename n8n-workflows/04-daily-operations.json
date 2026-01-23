@@ -1,0 +1,511 @@
+{
+  "name": "04 - Daily Operations & Maintenance",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        },
+        "timeZone": "America/New_York"
+      },
+      "id": "cron-trigger",
+      "name": "Daily 8am EST",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 1000,
+        "filters": {
+          "tags": "contacted",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "last_contact_date",
+                "operator": "lessThan",
+                "fieldValue": "={{ $now.minus({ days: 7 }).toISO() }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "find-stale-leads",
+      "name": "Find Stale Leads",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [450, 200],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process stale leads for follow-up\nconst staleLeads = $input.all();\nconst followUpBatch = [];\n\nfor (const item of staleLeads) {\n  const lead = item.json;\n  \n  followUpBatch.push({\n    json: {\n      email: lead.email,\n      firstName: lead.firstName,\n      lastName: lead.lastName,\n      lastContactDate: lead.customFields?.last_contact_date,\n      daysSinceContact: Math.floor(\n        (Date.now() - new Date(lead.customFields?.last_contact_date).getTime()) \n        / (1000 * 60 * 60 * 24)\n      ),\n      ghlContactId: lead.id\n    }\n  });\n}\n\nconsole.log(`Found ${followUpBatch.length} stale leads`);\n\nreturn followUpBatch;"
+      },
+      "id": "process-stale-leads",
+      "name": "Process Stale Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.instantly.ai/api/v1/lead/add",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "instantlyApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"api_key\": $credentials.apiKey,\n  \"campaign_id\": $env.INSTANTLY_FOLLOWUP_CAMPAIGN_ID,\n  \"email\": $json.email,\n  \"first_name\": $json.firstName,\n  \"last_name\": $json.lastName,\n  \"variables\": {\n    \"days_since_contact\": $json.daysSinceContact\n  }\n} }}",
+        "options": {}
+      },
+      "id": "trigger-followup",
+      "name": "Trigger Follow-up Campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 200],
+      "retryOnFail": true,
+      "maxTries": 2
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.ghlContactId }}",
+        "updateFields": {
+          "tags": "follow-up-scheduled",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "follow_up_triggered",
+                "fieldValue": "={{ $now.toISO() }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-followup-status",
+      "name": "Update Follow-up Status",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1050, 200],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "getAll",
+        "returnAll": true,
+        "filters": {}
+      },
+      "id": "get-all-contacts",
+      "name": "Get All Contacts",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [450, 400],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate pipeline health metrics\nconst contacts = $input.all();\n\nconst metrics = {\n  total: contacts.length,\n  byStage: {},\n  byTag: {},\n  missingData: {\n    noEmail: 0,\n    noPhone: 0,\n    noCompany: 0\n  },\n  duplicates: [],\n  conversion: {\n    contacted: 0,\n    replied: 0,\n    booked: 0,\n    closed: 0\n  }\n};\n\nconst emailMap = new Map();\n\nfor (const item of contacts) {\n  const contact = item.json;\n  \n  // Count by tags\n  if (contact.tags) {\n    for (const tag of contact.tags) {\n      metrics.byTag[tag] = (metrics.byTag[tag] || 0) + 1;\n    }\n  }\n  \n  // Identify data quality issues\n  if (!contact.email) metrics.missingData.noEmail++;\n  if (!contact.phone) metrics.missingData.noPhone++;\n  if (!contact.companyName) metrics.missingData.noCompany++;\n  \n  // Find duplicates by email\n  if (contact.email) {\n    if (emailMap.has(contact.email)) {\n      metrics.duplicates.push({\n        email: contact.email,\n        ids: [emailMap.get(contact.email), contact.id]\n      });\n    } else {\n      emailMap.set(contact.email, contact.id);\n    }\n  }\n  \n  // Count conversion funnel\n  if (contact.tags?.includes('contacted')) metrics.conversion.contacted++;\n  if (contact.tags?.includes('replied')) metrics.conversion.replied++;\n  if (contact.tags?.includes('meeting-scheduled')) metrics.conversion.booked++;\n  if (contact.tags?.includes('closed-won')) metrics.conversion.closed++;\n}\n\n// Calculate conversion rates\nmetrics.conversionRates = {\n  contactedToReplied: metrics.conversion.contacted > 0 \n    ? (metrics.conversion.replied / metrics.conversion.contacted * 100).toFixed(2) \n    : 0,\n  repliedToBooked: metrics.conversion.replied > 0 \n    ? (metrics.conversion.booked / metrics.conversion.replied * 100).toFixed(2) \n    : 0,\n  bookedToClosed: metrics.conversion.booked > 0 \n    ? (metrics.conversion.closed / metrics.conversion.booked * 100).toFixed(2) \n    : 0\n};\n\nmetrics.timestamp = new Date().toISOString();\n\nreturn [{ json: metrics }];"
+      },
+      "id": "calculate-metrics",
+      "name": "Calculate Health Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate daily report content\nconst metrics = $input.first().json;\nconst staleLeads = $('Process Stale Leads').all();\n\nconst report = {\n  date: new Date().toISOString().split('T')[0],\n  summary: {\n    totalContacts: metrics.total,\n    staleLeadsFound: staleLeads.length,\n    dataQualityIssues: metrics.missingData.noEmail + metrics.missingData.noPhone + metrics.missingData.noCompany,\n    duplicatesFound: metrics.duplicates.length\n  },\n  pipeline: {\n    contacted: metrics.conversion.contacted,\n    replied: metrics.conversion.replied,\n    booked: metrics.conversion.booked,\n    closed: metrics.conversion.closed\n  },\n  conversionRates: metrics.conversionRates,\n  topTags: Object.entries(metrics.byTag)\n    .sort((a, b) => b[1] - a[1])\n    .slice(0, 5)\n    .map(([tag, count]) => ({ tag, count })),\n  dataQualityDetails: metrics.missingData,\n  duplicates: metrics.duplicates.slice(0, 10), // Top 10 duplicates\n  timestamp: metrics.timestamp\n};\n\nreturn [{ json: report }];"
+      },
+      "id": "generate-report",
+      "name": "Generate Daily Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format report as CSV\nconst report = $input.first().json;\n\nconst csvRows = [];\n\n// Summary section\ncsvRows.push('DAILY PIPELINE REPORT');\ncsvRows.push(`Date,${report.date}`);\ncsvRows.push('');\ncsvRows.push('SUMMARY');\ncsvRows.push('Metric,Value');\ncsvRows.push(`Total Contacts,${report.summary.totalContacts}`);\ncsvRows.push(`Stale Leads Found,${report.summary.staleLeadsFound}`);\ncsvRows.push(`Data Quality Issues,${report.summary.dataQualityIssues}`);\ncsvRows.push(`Duplicates Found,${report.summary.duplicatesFound}`);\ncsvRows.push('');\n\n// Pipeline section\ncsvRows.push('PIPELINE FUNNEL');\ncsvRows.push('Stage,Count');\ncsvRows.push(`Contacted,${report.pipeline.contacted}`);\ncsvRows.push(`Replied,${report.pipeline.replied}`);\ncsvRows.push(`Booked,${report.pipeline.booked}`);\ncsvRows.push(`Closed,${report.pipeline.closed}`);\ncsvRows.push('');\n\n// Conversion rates\ncsvRows.push('CONVERSION RATES');\ncsvRows.push('Metric,Rate');\ncsvRows.push(`Contacted → Replied,${report.conversionRates.contactedToReplied}%`);\ncsvRows.push(`Replied → Booked,${report.conversionRates.repliedToBooked}%`);\ncsvRows.push(`Booked → Closed,${report.conversionRates.bookedToClosed}%`);\ncsvRows.push('');\n\n// Top tags\ncsvRows.push('TOP TAGS');\ncsvRows.push('Tag,Count');\nfor (const tag of report.topTags) {\n  csvRows.push(`${tag.tag},${tag.count}`);\n}\n\nconst csvContent = csvRows.join('\\n');\n\nreturn [{\n  json: {\n    csv: csvContent,\n    filename: `pipeline-report-${report.date}.csv`,\n    report: report\n  }\n}];"
+      },
+      "id": "format-csv",
+      "name": "Format as CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "content": "=## 📊 Daily Pipeline Report - {{ $json.report.date }}\n\n### Summary\n• **Total Contacts:** {{ $json.report.summary.totalContacts }}\n• **Stale Leads:** {{ $json.report.summary.staleLeadsFound }} (follow-ups triggered)\n• **Data Quality Issues:** {{ $json.report.summary.dataQualityIssues }}\n• **Duplicates:** {{ $json.report.summary.duplicatesFound }}\n\n### Pipeline Funnel\n• **Contacted:** {{ $json.report.pipeline.contacted }}\n• **Replied:** {{ $json.report.pipeline.replied }}\n• **Booked:** {{ $json.report.pipeline.booked }}\n• **Closed:** {{ $json.report.pipeline.closed }}\n\n### Conversion Rates\n• **Contacted → Replied:** {{ $json.report.conversionRates.contactedToReplied }}%\n• **Replied → Booked:** {{ $json.report.conversionRates.repliedToBooked }}%\n• **Booked → Closed:** {{ $json.report.conversionRates.bookedToClosed }}%\n\n### Top Tags\n{% for tag in $json.report.topTags %}\n• {{ tag.tag }}: {{ tag.count }}\n{% endfor %}\n\n*Full CSV report attached*",
+        "options": {
+          "channel": "#pipeline-daily-reports",
+          "attachments": [
+            {
+              "filename": "={{ $json.filename }}",
+              "content": "={{ $json.csv }}"
+            }
+          ]
+        }
+      },
+      "id": "send-slack-report",
+      "name": "Send Slack Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1250, 400],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-webhook",
+          "name": "Slack Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "to": "={{ $env.REPORT_EMAIL_RECIPIENTS }}",
+        "subject": "=Daily Pipeline Report - {{ $json.report.date }}",
+        "text": "=Daily Pipeline Report\n\nSummary:\n- Total Contacts: {{ $json.report.summary.totalContacts }}\n- Stale Leads: {{ $json.report.summary.staleLeadsFound }}\n- Data Quality Issues: {{ $json.report.summary.dataQualityIssues }}\n\nSee attached CSV for full details.",
+        "attachments": "={{ [\n  {\n    filename: $json.filename,\n    content: $json.csv,\n    contentType: 'text/csv'\n  }\n] }}",
+        "options": {}
+      },
+      "id": "send-email-report",
+      "name": "Send Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1250, 500],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-config",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "getAll",
+        "returnAll": false,
+        "limit": 1000,
+        "filters": {
+          "tags": "closed-lost",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "closed_date",
+                "operator": "lessThan",
+                "fieldValue": "={{ $now.minus({ days: 30 }).toISO() }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "find-old-closed",
+      "name": "Find Old Closed Lost",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [450, 600],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Archive old closed-lost contacts\nconst contacts = $input.all();\nconst archived = [];\n\nfor (const item of contacts) {\n  archived.push({\n    json: {\n      contactId: item.json.id,\n      email: item.json.email,\n      closedDate: item.json.customFields?.closed_date,\n      archiveDate: new Date().toISOString()\n    }\n  });\n}\n\nconsole.log(`Archiving ${archived.length} old closed-lost contacts`);\n\nreturn archived;"
+      },
+      "id": "process-archive",
+      "name": "Process Archive List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 600]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.contactId }}",
+        "updateFields": {
+          "tags": "archived",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "archived_date",
+                "fieldValue": "={{ $json.archiveDate }}"
+              },
+              {
+                "fieldId": "archive_reason",
+                "fieldValue": "closed-lost-30days"
+              }
+            ]
+          }
+        }
+      },
+      "id": "archive-contact",
+      "name": "Archive Contact",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [850, 600],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all daily operations results\nconst staleLeads = $('Update Follow-up Status').all();\nconst report = $('Format as CSV').first().json;\nconst archived = $('Archive Contact').all();\n\nconst summary = {\n  date: new Date().toISOString().split('T')[0],\n  operations: {\n    staleLeadsProcessed: staleLeads.length,\n    reportGenerated: true,\n    contactsArchived: archived.length\n  },\n  metrics: report.report.summary,\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: summary }];"
+      },
+      "id": "aggregate-operations",
+      "name": "Aggregate Operations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 600]
+    },
+    {
+      "parameters": {
+        "content": "=## ✅ Daily Operations Complete - {{ $json.date }}\n\n**Operations Summary:**\n• Stale Leads Processed: {{ $json.operations.staleLeadsProcessed }}\n• Daily Report: Generated ✓\n• Contacts Archived: {{ $json.operations.contactsArchived }}\n\n**Pipeline Health:**\n• Total Contacts: {{ $json.metrics.totalContacts }}\n• Data Quality Issues: {{ $json.metrics.dataQualityIssues }}\n• Duplicates: {{ $json.metrics.duplicatesFound }}\n\n*Completed at: {{ $json.timestamp }}*",
+        "options": {
+          "channel": "#pipeline-notifications"
+        }
+      },
+      "id": "send-completion-notification",
+      "name": "Send Completion Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1250, 600],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-webhook",
+          "name": "Slack Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 8am EST": {
+      "main": [
+        [
+          {
+            "node": "Find Stale Leads",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get All Contacts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Find Old Closed Lost",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Stale Leads": {
+      "main": [
+        [
+          {
+            "node": "Process Stale Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Stale Leads": {
+      "main": [
+        [
+          {
+            "node": "Trigger Follow-up Campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Follow-up Campaign": {
+      "main": [
+        [
+          {
+            "node": "Update Follow-up Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Follow-up Status": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Operations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get All Contacts": {
+      "main": [
+        [
+          {
+            "node": "Calculate Health Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Health Metrics": {
+      "main": [
+        [
+          {
+            "node": "Generate Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Daily Report": {
+      "main": [
+        [
+          {
+            "node": "Format as CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format as CSV": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Report": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Operations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Report": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Operations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Old Closed Lost": {
+      "main": [
+        [
+          {
+            "node": "Process Archive List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Archive List": {
+      "main": [
+        [
+          {
+            "node": "Archive Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Archive Contact": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Operations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Operations": {
+      "main": [
+        [
+          {
+            "node": "Send Completion Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "daily-operations",
+      "id": "ops-tag"
+    },
+    {
+      "name": "maintenance",
+      "id": "maintenance-tag"
+    },
+    {
+      "name": "reporting",
+      "id": "reporting-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-23T00:00:00.000Z",
+  "versionId": "1.0.0"
+}

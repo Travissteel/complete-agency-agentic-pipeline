@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agency Pipeline - Live Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            color: #667eea;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-info {
+            text-align: right;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+
+        .status-online {
+            background: #10b981;
+            color: white;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .metric-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .metric-card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .metric-icon {
+            font-size: 24px;
+        }
+
+        .metric-items {
+            display: grid;
+            gap: 12px;
+        }
+
+        .metric-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .metric-label {
+            font-size: 14px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .metric-value {
+            font-size: 20px;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .metric-value.good {
+            color: #10b981;
+        }
+
+        .metric-value.warning {
+            color: #f59e0b;
+        }
+
+        .metric-value.critical {
+            color: #ef4444;
+        }
+
+        .percentage {
+            font-size: 14px;
+            margin-left: 4px;
+            color: #666;
+        }
+
+        .footer {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-top: 20px;
+        }
+
+        .footer p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .loading-spinner {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            background: #fee2e2;
+            border: 2px solid #ef4444;
+            border-radius: 12px;
+            padding: 20px;
+            color: #991b1b;
+            margin-bottom: 20px;
+        }
+
+        .refresh-notice {
+            background: #dbeafe;
+            border: 2px solid #3b82f6;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 12px;
+            font-size: 12px;
+            color: #1e40af;
+            text-align: center;
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 16px;
+                text-align: center;
+            }
+
+            .header-info {
+                text-align: center;
+            }
+
+            .metrics-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .trend-indicator {
+            font-size: 12px;
+            margin-left: 8px;
+        }
+
+        .trend-up {
+            color: #10b981;
+        }
+
+        .trend-down {
+            color: #ef4444;
+        }
+
+        .trend-neutral {
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div>
+                <h1>
+                    <span class="metric-icon">📊</span>
+                    AI Agency Pipeline Dashboard
+                </h1>
+                <div class="status-badge status-online">● System Online</div>
+            </div>
+            <div class="header-info">
+                <div id="lastUpdate">Last updated: Loading...</div>
+                <div id="nextRefresh">Next refresh in: 5:00</div>
+            </div>
+        </div>
+
+        <!-- Error Message (hidden by default) -->
+        <div id="errorMessage" class="error" style="display: none;">
+            <strong>⚠️ Connection Error:</strong> Unable to fetch metrics. Check your API endpoint and try again.
+        </div>
+
+        <!-- Loading State -->
+        <div id="loadingState" class="loading">
+            <div class="loading-spinner"></div>
+            <p>Loading metrics...</p>
+        </div>
+
+        <!-- Metrics Grid -->
+        <div id="metricsGrid" class="metrics-grid" style="display: none;">
+            <!-- Lead Generation Card -->
+            <div class="metric-card">
+                <div class="metric-card-header">
+                    <div class="metric-card-title">
+                        <span class="metric-icon">🎯</span>
+                        Lead Generation
+                    </div>
+                </div>
+                <div class="metric-items">
+                    <div class="metric-item">
+                        <span class="metric-label">Scraped</span>
+                        <span class="metric-value" id="leadsScraped">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Enriched</span>
+                        <span class="metric-value" id="leadsEnriched">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Success Rate</span>
+                        <span class="metric-value" id="enrichmentRate">0<span class="percentage">%</span></span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Quality Score</span>
+                        <span class="metric-value" id="qualityScore">0<span class="percentage">/100</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Outreach Card -->
+            <div class="metric-card">
+                <div class="metric-card-header">
+                    <div class="metric-card-title">
+                        <span class="metric-icon">📧</span>
+                        Outreach Performance
+                    </div>
+                </div>
+                <div class="metric-items">
+                    <div class="metric-item">
+                        <span class="metric-label">Sent</span>
+                        <span class="metric-value" id="emailsSent">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Delivered</span>
+                        <span class="metric-value" id="emailsDelivered">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Open Rate</span>
+                        <span class="metric-value" id="openRate">0<span class="percentage">%</span></span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Reply Rate</span>
+                        <span class="metric-value" id="replyRate">0<span class="percentage">%</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CRM Card -->
+            <div class="metric-card">
+                <div class="metric-card-header">
+                    <div class="metric-card-title">
+                        <span class="metric-icon">🔄</span>
+                        CRM Activity
+                    </div>
+                </div>
+                <div class="metric-items">
+                    <div class="metric-item">
+                        <span class="metric-label">Contacts Created</span>
+                        <span class="metric-value" id="contactsCreated">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Opportunities</span>
+                        <span class="metric-value" id="opportunitiesCreated">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Won</span>
+                        <span class="metric-value good" id="opportunitiesWon">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Pipeline Value</span>
+                        <span class="metric-value" id="pipelineValue">$0</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Booking Card -->
+            <div class="metric-card">
+                <div class="metric-card-header">
+                    <div class="metric-card-title">
+                        <span class="metric-icon">📅</span>
+                        Booking Stats
+                    </div>
+                </div>
+                <div class="metric-items">
+                    <div class="metric-item">
+                        <span class="metric-label">Booked</span>
+                        <span class="metric-value good" id="bookingsConfirmed">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">Completed</span>
+                        <span class="metric-value" id="bookingsCompleted">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">No-Shows</span>
+                        <span class="metric-value warning" id="noShows">0</span>
+                    </div>
+                    <div class="metric-item">
+                        <span class="metric-label">AI Calls</span>
+                        <span class="metric-value" id="aiCalls">0</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>AI Agency Pipeline Monitoring System v1.0</p>
+            <div class="refresh-notice">
+                🔄 Auto-refresh enabled (every 5 minutes)
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_ENDPOINT = '/api/metrics'; // Change this to your actual API endpoint
+        const REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
+        const USE_MOCK_DATA = true; // Set to false when API is ready
+
+        let refreshTimer;
+        let countdownTimer;
+        let secondsUntilRefresh = 300; // 5 minutes
+
+        /**
+         * Fetch metrics from API
+         */
+        async function fetchMetrics() {
+            try {
+                if (USE_MOCK_DATA) {
+                    // Return mock data for development/testing
+                    return generateMockData();
+                }
+
+                const response = await fetch(API_ENDPOINT);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error('Failed to fetch metrics:', error);
+                throw error;
+            }
+        }
+
+        /**
+         * Generate mock data for testing
+         */
+        function generateMockData() {
+            return {
+                leadGen: {
+                    leadsScraped: Math.floor(Math.random() * 500) + 200,
+                    leadsEnriched: Math.floor(Math.random() * 400) + 150,
+                    enrichmentRate: Math.floor(Math.random() * 30) + 70,
+                    qualityScore: Math.floor(Math.random() * 20) + 75
+                },
+                outreach: {
+                    emailsSent: Math.floor(Math.random() * 1000) + 500,
+                    emailsDelivered: Math.floor(Math.random() * 900) + 450,
+                    openRate: Math.floor(Math.random() * 20) + 35,
+                    replyRate: Math.floor(Math.random() * 10) + 5
+                },
+                crm: {
+                    contactsCreated: Math.floor(Math.random() * 300) + 100,
+                    opportunitiesCreated: Math.floor(Math.random() * 50) + 20,
+                    opportunitiesWon: Math.floor(Math.random() * 15) + 5,
+                    pipelineValue: Math.floor(Math.random() * 50000) + 25000
+                },
+                booking: {
+                    bookingsConfirmed: Math.floor(Math.random() * 30) + 10,
+                    bookingsCompleted: Math.floor(Math.random() * 25) + 8,
+                    noShows: Math.floor(Math.random() * 5) + 1,
+                    aiCalls: Math.floor(Math.random() * 50) + 20
+                },
+                uptime: '99.9%'
+            };
+        }
+
+        /**
+         * Update the dashboard with new metrics
+         */
+        function updateDashboard(data) {
+            // Hide loading, show metrics
+            document.getElementById('loadingState').style.display = 'none';
+            document.getElementById('metricsGrid').style.display = 'grid';
+            document.getElementById('errorMessage').style.display = 'none';
+
+            // Lead Generation
+            updateMetric('leadsScraped', data.leadGen.leadsScraped);
+            updateMetric('leadsEnriched', data.leadGen.leadsEnriched);
+            updateMetric('enrichmentRate', data.leadGen.enrichmentRate, 'percentage');
+            updateMetric('qualityScore', data.leadGen.qualityScore, 'score');
+
+            // Outreach
+            updateMetric('emailsSent', data.outreach.emailsSent);
+            updateMetric('emailsDelivered', data.outreach.emailsDelivered);
+            updateMetric('openRate', data.outreach.openRate, 'percentage');
+            updateMetric('replyRate', data.outreach.replyRate, 'percentage');
+
+            // CRM
+            updateMetric('contactsCreated', data.crm.contactsCreated);
+            updateMetric('opportunitiesCreated', data.crm.opportunitiesCreated);
+            updateMetric('opportunitiesWon', data.crm.opportunitiesWon);
+            updateMetric('pipelineValue', data.crm.pipelineValue, 'currency');
+
+            // Booking
+            updateMetric('bookingsConfirmed', data.booking.bookingsConfirmed);
+            updateMetric('bookingsCompleted', data.booking.bookingsCompleted);
+            updateMetric('noShows', data.booking.noShows);
+            updateMetric('aiCalls', data.booking.aiCalls);
+
+            // Update timestamp
+            const now = new Date();
+            document.getElementById('lastUpdate').textContent =
+                `Last updated: ${now.toLocaleTimeString()}`;
+
+            // Apply color coding based on thresholds
+            applyColorCoding(data);
+        }
+
+        /**
+         * Update a single metric element
+         */
+        function updateMetric(elementId, value, type = 'number') {
+            const element = document.getElementById(elementId);
+            if (!element) return;
+
+            let formattedValue = value;
+            if (type === 'currency') {
+                formattedValue = `$${value.toLocaleString()}`;
+                element.innerHTML = formattedValue;
+            } else if (type === 'percentage') {
+                element.innerHTML = `${value}<span class="percentage">%</span>`;
+            } else if (type === 'score') {
+                element.innerHTML = `${value}<span class="percentage">/100</span>`;
+            } else {
+                element.textContent = value.toLocaleString();
+            }
+        }
+
+        /**
+         * Apply color coding based on metric thresholds
+         */
+        function applyColorCoding(data) {
+            // Enrichment rate
+            const enrichmentRate = document.getElementById('enrichmentRate');
+            if (data.leadGen.enrichmentRate >= 80) {
+                enrichmentRate.className = 'metric-value good';
+            } else if (data.leadGen.enrichmentRate >= 60) {
+                enrichmentRate.className = 'metric-value';
+            } else {
+                enrichmentRate.className = 'metric-value warning';
+            }
+
+            // Quality score
+            const qualityScore = document.getElementById('qualityScore');
+            if (data.leadGen.qualityScore >= 80) {
+                qualityScore.className = 'metric-value good';
+            } else if (data.leadGen.qualityScore >= 60) {
+                qualityScore.className = 'metric-value';
+            } else {
+                qualityScore.className = 'metric-value warning';
+            }
+
+            // Open rate
+            const openRate = document.getElementById('openRate');
+            if (data.outreach.openRate >= 40) {
+                openRate.className = 'metric-value good';
+            } else if (data.outreach.openRate >= 25) {
+                openRate.className = 'metric-value';
+            } else {
+                openRate.className = 'metric-value warning';
+            }
+
+            // Reply rate
+            const replyRate = document.getElementById('replyRate');
+            if (data.outreach.replyRate >= 10) {
+                replyRate.className = 'metric-value good';
+            } else if (data.outreach.replyRate >= 5) {
+                replyRate.className = 'metric-value';
+            } else {
+                replyRate.className = 'metric-value warning';
+            }
+
+            // No-shows (inverse - lower is better)
+            const noShows = document.getElementById('noShows');
+            if (data.booking.noShows <= 2) {
+                noShows.className = 'metric-value good';
+            } else if (data.booking.noShows <= 5) {
+                noShows.className = 'metric-value warning';
+            } else {
+                noShows.className = 'metric-value critical';
+            }
+        }
+
+        /**
+         * Show error message
+         */
+        function showError(message) {
+            document.getElementById('loadingState').style.display = 'none';
+            document.getElementById('metricsGrid').style.display = 'none';
+            const errorElement = document.getElementById('errorMessage');
+            errorElement.style.display = 'block';
+            errorElement.innerHTML = `<strong>⚠️ Connection Error:</strong> ${message}`;
+        }
+
+        /**
+         * Start countdown timer for next refresh
+         */
+        function startCountdown() {
+            secondsUntilRefresh = 300; // Reset to 5 minutes
+
+            countdownTimer = setInterval(() => {
+                secondsUntilRefresh--;
+                const minutes = Math.floor(secondsUntilRefresh / 60);
+                const seconds = secondsUntilRefresh % 60;
+                document.getElementById('nextRefresh').textContent =
+                    `Next refresh in: ${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+                if (secondsUntilRefresh <= 0) {
+                    clearInterval(countdownTimer);
+                }
+            }, 1000);
+        }
+
+        /**
+         * Load and refresh metrics
+         */
+        async function loadMetrics() {
+            try {
+                const data = await fetchMetrics();
+                updateDashboard(data);
+                startCountdown();
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+
+        /**
+         * Start auto-refresh
+         */
+        function startAutoRefresh() {
+            // Initial load
+            loadMetrics();
+
+            // Set up periodic refresh
+            refreshTimer = setInterval(loadMetrics, REFRESH_INTERVAL);
+        }
+
+        /**
+         * Stop auto-refresh (for cleanup)
+         */
+        function stopAutoRefresh() {
+            if (refreshTimer) clearInterval(refreshTimer);
+            if (countdownTimer) clearInterval(countdownTimer);
+        }
+
+        // Start dashboard on page load
+        document.addEventListener('DOMContentLoaded', startAutoRefresh);
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', stopAutoRefresh);
+
+        // Handle visibility change (pause when tab is hidden)
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopAutoRefresh();
+            } else {
+                startAutoRefresh();
+            }
+        });
+    </script>
+</body>
+</html>

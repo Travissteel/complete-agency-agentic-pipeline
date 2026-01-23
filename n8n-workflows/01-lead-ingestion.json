@@ -1,0 +1,380 @@
+{
+  "name": "01 - Lead Ingestion Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "apify-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-apify",
+      "name": "Apify Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "apify-scrape-complete"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\"status\": \"received\", \"datasetId\": $json.datasetId} }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.apify.com/v2/datasets/{{ $json.body.datasetId }}/items",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "apifyApi",
+        "options": {
+          "queryParameters": {
+            "parameter": [
+              {
+                "name": "format",
+                "value": "json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "fetch-apify-data",
+      "name": "Fetch Apify Dataset",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and clean lead data\nconst leads = [];\n\nfor (const item of $input.all()) {\n  const lead = item.json;\n  \n  // Validate required fields\n  if (!lead.email || !lead.firstName || !lead.company) {\n    console.log('Skipping invalid lead:', lead);\n    continue;\n  }\n  \n  // Email validation regex\n  const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n  if (!emailRegex.test(lead.email)) {\n    console.log('Invalid email format:', lead.email);\n    continue;\n  }\n  \n  // Clean and normalize data\n  const cleanLead = {\n    firstName: lead.firstName?.trim() || '',\n    lastName: lead.lastName?.trim() || '',\n    email: lead.email?.toLowerCase().trim(),\n    phone: lead.phone?.replace(/\\D/g, '') || '',\n    company: lead.company?.trim() || '',\n    title: lead.title?.trim() || '',\n    website: lead.website?.trim() || '',\n    linkedin: lead.linkedin?.trim() || '',\n    source: 'apify-scraper',\n    tags: ['cold-outreach', 'new-lead'],\n    customFields: {\n      scrapedDate: new Date().toISOString(),\n      datasetId: $('Apify Webhook').item.json.body.datasetId\n    }\n  };\n  \n  leads.push({ json: cleanLead });\n}\n\nconsole.log(`Validated ${leads.length} leads out of ${$input.all().length}`);\n\nreturn leads;"
+      },
+      "id": "validate-leads",
+      "name": "Validate & Clean Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-valid-leads",
+      "name": "Check Valid Leads",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "upsert",
+        "email": "={{ $json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.firstName }}",
+          "lastName": "={{ $json.lastName }}",
+          "phone": "={{ $json.phone }}",
+          "companyName": "={{ $json.company }}",
+          "tags": "={{ $json.tags.join(',') }}",
+          "source": "={{ $json.source }}",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "scraped_date",
+                "fieldValue": "={{ $json.customFields.scrapedDate }}"
+              },
+              {
+                "fieldId": "dataset_id",
+                "fieldValue": "={{ $json.customFields.datasetId }}"
+              },
+              {
+                "fieldId": "outreach_status",
+                "fieldValue": "pending"
+              }
+            ]
+          }
+        }
+      },
+      "id": "create-ghl-contact",
+      "name": "Create GHL Contact",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1250, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format leads for Instantly CSV upload\nconst leads = $input.all();\nconst csvRows = [];\n\n// CSV header\ncsvRows.push('Email,First Name,Last Name,Company Name,Website,Tags');\n\n// Format each lead\nfor (const item of leads) {\n  const lead = item.json;\n  const row = [\n    lead.email,\n    lead.firstName,\n    lead.lastName || '',\n    lead.company || '',\n    lead.website || '',\n    'cold-outreach,new-lead'\n  ].map(field => `\"${field}\"`).join(',');\n  \n  csvRows.push(row);\n}\n\nconst csvContent = csvRows.join('\\n');\n\nreturn [{\n  json: {\n    csv: csvContent,\n    leadCount: leads.length,\n    campaignName: `Apify Import ${new Date().toISOString().split('T')[0]}`\n  }\n}];"
+      },
+      "id": "format-instantly-csv",
+      "name": "Format for Instantly",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.instantly.ai/api/v1/lead/add",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "instantlyApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"api_key\": $credentials.apiKey,\n  \"campaign_id\": $env.INSTANTLY_CAMPAIGN_ID,\n  \"csv_data\": $json.csv\n} }}",
+        "options": {}
+      },
+      "id": "upload-to-instantly",
+      "name": "Upload to Instantly",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 400],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate results from both GHL and Instantly\nconst ghlResults = $('Create GHL Contact').all();\nconst instantlyResult = $('Upload to Instantly').first().json;\n\nconst summary = {\n  totalLeads: ghlResults.length,\n  ghlContactsCreated: ghlResults.filter(item => item.json.id).length,\n  instantlyUploadStatus: instantlyResult.success ? 'success' : 'failed',\n  instantlyLeadsAdded: instantlyResult.leads_added || 0,\n  timestamp: new Date().toISOString(),\n  errors: []\n};\n\n// Collect any errors\nfor (const item of ghlResults) {\n  if (item.json.error) {\n    summary.errors.push({\n      email: item.json.email,\n      error: item.json.error\n    });\n  }\n}\n\nreturn [{ json: summary }];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "content": "=## Lead Ingestion Complete ✅\n\n**Total Leads Processed:** {{ $json.totalLeads }}\n**GHL Contacts Created:** {{ $json.ghlContactsCreated }}\n**Instantly Upload:** {{ $json.instantlyUploadStatus }}\n**Instantly Leads Added:** {{ $json.instantlyLeadsAdded }}\n\n{% if $json.errors.length > 0 %}\n**Errors ({{ $json.errors.length }}):**\n{% for error in $json.errors %}\n- {{ error.email }}: {{ error.error }}\n{% endfor %}\n{% endif %}\n\n*Timestamp: {{ $json.timestamp }}*",
+        "options": {
+          "channel": "#pipeline-notifications"
+        }
+      },
+      "id": "send-slack-notification",
+      "name": "Send Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1850, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-webhook",
+          "name": "Slack Webhook"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "keepOnlySome": true,
+        "values": {
+          "string": [
+            {
+              "name": "error",
+              "value": "={{ $json.message }}"
+            },
+            {
+              "name": "node",
+              "value": "={{ $json.node.name }}"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-error",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1050, 500]
+    },
+    {
+      "parameters": {
+        "content": "=## ⚠️ Lead Ingestion Error\n\n**Node:** {{ $json.node }}\n**Error:** {{ $json.error }}\n**Timestamp:** {{ $json.timestamp }}\n\nPlease check the workflow execution logs for details.",
+        "options": {
+          "channel": "#pipeline-errors"
+        }
+      },
+      "id": "error-notification",
+      "name": "Error Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1250, 500],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-webhook",
+          "name": "Slack Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Apify Webhook": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Response": {
+      "main": [
+        [
+          {
+            "node": "Fetch Apify Dataset",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Apify Dataset": {
+      "main": [
+        [
+          {
+            "node": "Validate & Clean Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Clean Leads": {
+      "main": [
+        [
+          {
+            "node": "Check Valid Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Valid Leads": {
+      "main": [
+        [
+          {
+            "node": "Create GHL Contact",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Format for Instantly",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create GHL Contact": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Instantly": {
+      "main": [
+        [
+          {
+            "node": "Upload to Instantly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Instantly": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "lead-generation",
+      "id": "lead-gen-tag"
+    },
+    {
+      "name": "apify-integration",
+      "id": "apify-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-23T00:00:00.000Z",
+  "versionId": "1.0.0"
+}

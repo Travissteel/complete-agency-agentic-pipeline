@@ -1,0 +1,630 @@
+{
+  "name": "03 - Booking Management",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calendar-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-calendar",
+      "name": "Calendar Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "calendar-event-change"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\"status\": \"received\", \"eventId\": $json.eventId} }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize calendar event data\nconst webhookData = $input.first().json.body;\n\nconst event = {\n  eventId: webhookData.eventId || webhookData.id,\n  eventType: webhookData.type || 'unknown', // created, updated, cancelled\n  attendeeEmail: webhookData.attendee?.email || '',\n  attendeeName: webhookData.attendee?.name || '',\n  attendeePhone: webhookData.attendee?.phone || '',\n  startTime: webhookData.startTime || '',\n  endTime: webhookData.endTime || '',\n  timezone: webhookData.timezone || 'America/New_York',\n  meetingType: webhookData.meetingType || 'discovery-call',\n  salesRep: webhookData.assignedTo || 'unassigned',\n  calendarProvider: webhookData.provider || 'unknown',\n  notes: webhookData.notes || '',\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: event }];"
+      },
+      "id": "normalize-event",
+      "name": "Normalize Event Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "event-created",
+              "leftValue": "={{ $json.eventType }}",
+              "rightValue": "created",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "route-by-event-type",
+      "name": "Route by Event Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "get",
+        "contactId": "={{ $json.attendeeEmail }}",
+        "options": {}
+      },
+      "id": "get-ghl-contact-created",
+      "name": "Get GHL Contact",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1050, 100],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "opportunity",
+        "operation": "create",
+        "contactId": "={{ $json.id }}",
+        "pipelineId": "={{ $env.GHL_PIPELINE_ID }}",
+        "stageId": "={{ $env.GHL_STAGE_MEETING_SCHEDULED }}",
+        "additionalFields": {
+          "name": "={{ $('Normalize Event Data').item.json.meetingType }} - {{ $('Normalize Event Data').item.json.attendeeName }}",
+          "monetaryValue": 5000,
+          "assignedTo": "={{ $('Normalize Event Data').item.json.salesRep }}",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "meeting_date",
+                "fieldValue": "={{ $('Normalize Event Data').item.json.startTime }}"
+              },
+              {
+                "fieldId": "meeting_type",
+                "fieldValue": "={{ $('Normalize Event Data').item.json.meetingType }}"
+              },
+              {
+                "fieldId": "calendar_event_id",
+                "fieldValue": "={{ $('Normalize Event Data').item.json.eventId }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "create-ghl-opportunity",
+      "name": "Create GHL Opportunity",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1250, 100],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $('Get GHL Contact').item.json.id }}",
+        "updateFields": {
+          "tags": "meeting-scheduled,qualified",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "last_booking_date",
+                "fieldValue": "={{ $now.toISO() }}"
+              },
+              {
+                "fieldId": "booking_status",
+                "fieldValue": "confirmed"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-contact-booked",
+      "name": "Update Contact - Booked",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1450, 100],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format confirmation email\nconst event = $('Normalize Event Data').first().json;\n\nconst startDate = new Date(event.startTime);\nconst options = {\n  weekday: 'long',\n  year: 'numeric',\n  month: 'long',\n  day: 'numeric',\n  hour: '2-digit',\n  minute: '2-digit',\n  timeZone: event.timezone\n};\n\nconst formattedDate = startDate.toLocaleString('en-US', options);\n\nconst emailContent = {\n  to: event.attendeeEmail,\n  subject: `Meeting Confirmed: ${event.meetingType}`,\n  body: `Hi ${event.attendeeName},\\n\\nYour meeting has been confirmed!\\n\\n📅 Date & Time: ${formattedDate}\\n⏱️ Duration: 30 minutes\\n👤 With: ${event.salesRep}\\n\\nWhat to prepare:\\n• Brief overview of your business goals\\n• Any specific questions or challenges\\n• Calendar link for easy rescheduling if needed\\n\\nLooking forward to speaking with you!\\n\\nBest regards,\\nYour Team`\n};\n\nreturn [{ json: emailContent }];"
+      },
+      "id": "format-confirmation-email",
+      "name": "Format Confirmation Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1650, 100]
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "body": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "send-confirmation-email",
+      "name": "Send Confirmation Email",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1850, 100],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24
+            }
+          ]
+        },
+        "timeZone": "={{ $('Normalize Event Data').item.json.timezone }}",
+        "referenceDate": "={{ $('Normalize Event Data').item.json.startTime }}"
+      },
+      "id": "schedule-reminder",
+      "name": "Schedule 24hr Reminder",
+      "type": "n8n-nodes-base.schedule",
+      "typeVersion": 1.2,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "resource": "sms",
+        "operation": "send",
+        "phoneNumber": "={{ $('Normalize Event Data').item.json.attendeePhone }}",
+        "message": "=Reminder: You have a {{ $('Normalize Event Data').item.json.meetingType }} tomorrow at {{ $('Normalize Event Data').item.json.startTime }}. Looking forward to it! Reply CANCEL to reschedule.",
+        "options": {}
+      },
+      "id": "send-reminder-sms",
+      "name": "Send Reminder SMS",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1850, 200],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "opportunity",
+        "operation": "update",
+        "opportunityId": "={{ $json.opportunityId }}",
+        "updateFields": {
+          "stageId": "={{ $env.GHL_STAGE_MEETING_UPDATED }}",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "meeting_date",
+                "fieldValue": "={{ $('Normalize Event Data').item.json.startTime }}"
+              },
+              {
+                "fieldId": "last_updated",
+                "fieldValue": "={{ $now.toISO() }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-opportunity-time",
+      "name": "Update Opportunity Time",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1050, 300],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "toEmail": "={{ $('Normalize Event Data').item.json.attendeeEmail }}",
+        "subject": "Meeting Time Updated",
+        "body": "=Hi {{ $('Normalize Event Data').item.json.attendeeName }},\\n\\nYour meeting time has been updated.\\n\\nNew Time: {{ $('Normalize Event Data').item.json.startTime }}\\n\\nSee you then!",
+        "options": {}
+      },
+      "id": "send-update-notification",
+      "name": "Send Update Notification",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "opportunity",
+        "operation": "update",
+        "opportunityId": "={{ $json.opportunityId }}",
+        "updateFields": {
+          "stageId": "={{ $env.GHL_STAGE_MEETING_CANCELLED }}",
+          "status": "lost",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "cancellation_date",
+                "fieldValue": "={{ $now.toISO() }}"
+              },
+              {
+                "fieldId": "cancellation_reason",
+                "fieldValue": "attendee-cancelled"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-opportunity-cancelled",
+      "name": "Update Opportunity - Cancelled",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1050, 500],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "email",
+        "operation": "send",
+        "toEmail": "={{ $('Normalize Event Data').item.json.attendeeEmail }}",
+        "subject": "Meeting Cancelled - Let's Reschedule",
+        "body": "=Hi {{ $('Normalize Event Data').item.json.attendeeName }},\\n\\nWe received your cancellation. No problem!\\n\\nWhen you're ready to reschedule, book a new time here:\\n{{ $env.CALENDAR_BOOKING_LINK }}\\n\\nLooking forward to connecting soon!",
+        "options": {}
+      },
+      "id": "send-cancellation-email",
+      "name": "Send Cancellation Email",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1250, 500],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "unit": "hours",
+        "amount": 48,
+        "options": {}
+      },
+      "id": "wait-48-hours",
+      "name": "Wait 48 Hours",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1450, 500]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NURTURE_WORKFLOW_WEBHOOK }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"contactId\": $('Normalize Event Data').item.json.attendeeEmail,\n  \"sequenceType\": \"re-engagement\",\n  \"trigger\": \"cancelled-meeting\"\n} }}",
+        "options": {}
+      },
+      "id": "trigger-reengagement",
+      "name": "Trigger Re-engagement",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate booking results\nconst event = $('Normalize Event Data').first().json;\n\nconst summary = {\n  eventId: event.eventId,\n  eventType: event.eventType,\n  attendee: event.attendeeName,\n  email: event.attendeeEmail,\n  startTime: event.startTime,\n  action: 'processed',\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: summary }];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "content": "=## 📅 Booking Event: {{ $json.eventType }}\n\n**Attendee:** {{ $json.attendee }} ({{ $json.email }})\n**Time:** {{ $json.startTime }}\n**Event ID:** {{ $json.eventId }}\n\n*Processed at: {{ $json.timestamp }}*",
+        "options": {
+          "channel": "#pipeline-notifications"
+        }
+      },
+      "id": "send-notification",
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [2250, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-webhook",
+          "name": "Slack Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Calendar Webhook": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Response": {
+      "main": [
+        [
+          {
+            "node": "Normalize Event Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Event Data": {
+      "main": [
+        [
+          {
+            "node": "Route by Event Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Event Type": {
+      "main": [
+        [
+          {
+            "node": "Get GHL Contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Opportunity Time",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Opportunity - Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get GHL Contact": {
+      "main": [
+        [
+          {
+            "node": "Create GHL Opportunity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create GHL Opportunity": {
+      "main": [
+        [
+          {
+            "node": "Update Contact - Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Contact - Booked": {
+      "main": [
+        [
+          {
+            "node": "Format Confirmation Email",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Schedule 24hr Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Confirmation Email": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Confirmation Email": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule 24hr Reminder": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reminder SMS": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Opportunity Time": {
+      "main": [
+        [
+          {
+            "node": "Send Update Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Update Notification": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Opportunity - Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Send Cancellation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Cancellation Email": {
+      "main": [
+        [
+          {
+            "node": "Wait 48 Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 48 Hours": {
+      "main": [
+        [
+          {
+            "node": "Trigger Re-engagement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Re-engagement": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "booking-management",
+      "id": "booking-tag"
+    },
+    {
+      "name": "calendar-integration",
+      "id": "calendar-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-23T00:00:00.000Z",
+  "versionId": "1.0.0"
+}

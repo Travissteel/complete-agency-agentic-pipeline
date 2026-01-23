@@ -1,0 +1,520 @@
+{
+  "name": "02 - Reply Processing & Routing",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-reply",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-reply",
+      "name": "Email Reply Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "email-reply-received"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {\"status\": \"processing\", \"messageId\": $json.messageId} }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and normalize reply data from webhook\nconst webhookData = $input.first().json.body;\n\nconst reply = {\n  messageId: webhookData.messageId || webhookData.id,\n  email: webhookData.from?.email || webhookData.email,\n  fromName: webhookData.from?.name || '',\n  subject: webhookData.subject || '',\n  body: webhookData.text || webhookData.body || '',\n  timestamp: webhookData.timestamp || new Date().toISOString(),\n  source: webhookData.source || 'unknown', // instantly or smartlead\n  campaignId: webhookData.campaignId || '',\n  threadId: webhookData.threadId || ''\n};\n\n// Basic sanitization\nreply.body = reply.body.replace(/<[^>]*>/g, '').trim(); // Strip HTML\n\nreturn [{ json: reply }];"
+      },
+      "id": "normalize-reply",
+      "name": "Normalize Reply Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=You are an AI assistant analyzing email replies from cold outreach campaigns.\n\nAnalyze this email reply and provide:\n1. Sentiment: positive, neutral, negative, or out-of-office\n2. Intent: interested, not-interested, needs-info, book-meeting, or unclear\n3. Priority: high, medium, or low\n4. Key points: bullet list of main points from the email\n5. Suggested response: brief guidance for follow-up\n\nEmail from: {{ $json.fromName }} ({{ $json.email }})\nSubject: {{ $json.subject }}\n\nBody:\n{{ $json.body }}\n\nRespond in JSON format:\n{\n  \"sentiment\": \"positive|neutral|negative|out-of-office\",\n  \"intent\": \"interested|not-interested|needs-info|book-meeting|unclear\",\n  \"priority\": \"high|medium|low\",\n  \"keyPoints\": [\"point 1\", \"point 2\"],\n  \"suggestedResponse\": \"brief guidance\",\n  \"reasoning\": \"brief explanation of analysis\"\n}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 500
+        }
+      },
+      "id": "analyze-sentiment",
+      "name": "AI Sentiment Analysis",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [850, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-api-key",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI response and combine with original data\nconst replyData = $('Normalize Reply Data').first().json;\nconst aiResponse = $input.first().json.message?.content || '{}';\n\nlet analysis;\ntry {\n  analysis = JSON.parse(aiResponse);\n} catch (e) {\n  // Fallback if AI doesn't return valid JSON\n  analysis = {\n    sentiment: 'neutral',\n    intent: 'unclear',\n    priority: 'medium',\n    keyPoints: ['AI parsing failed'],\n    suggestedResponse: 'Manual review required',\n    reasoning: 'Could not parse AI response'\n  };\n}\n\nconst processedReply = {\n  ...replyData,\n  analysis: analysis,\n  processedAt: new Date().toISOString()\n};\n\nreturn [{ json: processedReply }];"
+      },
+      "id": "parse-analysis",
+      "name": "Parse AI Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "intent-interested",
+              "leftValue": "={{ $json.analysis.intent }}",
+              "rightValue": "interested",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "route-by-intent",
+      "name": "Route by Intent",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.ghlContactId }}",
+        "updateFields": {
+          "tags": "qualified,high-intent",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "reply_sentiment",
+                "fieldValue": "={{ $json.analysis.sentiment }}"
+              },
+              {
+                "fieldId": "reply_intent",
+                "fieldValue": "={{ $json.analysis.intent }}"
+              },
+              {
+                "fieldId": "last_reply_date",
+                "fieldValue": "={{ $json.timestamp }}"
+              },
+              {
+                "fieldId": "priority",
+                "fieldValue": "={{ $json.analysis.priority }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-ghl-interested",
+      "name": "Update GHL - Interested",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1450, 100],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.AI_RECEPTIONIST_WEBHOOK }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"contactId\": $json.ghlContactId,\n  \"email\": $json.email,\n  \"name\": $json.fromName,\n  \"trigger\": \"high-intent-reply\",\n  \"context\": {\n    \"replyBody\": $json.body,\n    \"sentiment\": $json.analysis.sentiment,\n    \"keyPoints\": $json.analysis.keyPoints\n  }\n} }}",
+        "options": {}
+      },
+      "id": "trigger-ai-call",
+      "name": "Trigger AI Receptionist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 100]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.ghlContactId }}",
+        "updateFields": {
+          "tags": "needs-info,nurture",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "reply_sentiment",
+                "fieldValue": "={{ $json.analysis.sentiment }}"
+              },
+              {
+                "fieldId": "reply_intent",
+                "fieldValue": "needs-info"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-ghl-needsinfo",
+      "name": "Update GHL - Needs Info",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1450, 250],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.NURTURE_WORKFLOW_WEBHOOK }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\n  \"contactId\": $json.ghlContactId,\n  \"email\": $json.email,\n  \"sequenceType\": \"info-packet\",\n  \"context\": $json.analysis.keyPoints\n} }}",
+        "options": {}
+      },
+      "id": "add-nurture-sequence",
+      "name": "Add to Nurture Sequence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 250]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.ghlContactId }}",
+        "updateFields": {
+          "tags": "ready-to-book",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "reply_intent",
+                "fieldValue": "book-meeting"
+              },
+              {
+                "fieldId": "booking_link_sent",
+                "fieldValue": "={{ $now.toISO() }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-ghl-booking",
+      "name": "Update GHL - Book Meeting",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1450, 400],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "sms",
+        "operation": "send",
+        "phoneNumber": "={{ $json.phone }}",
+        "message": "=Hi {{ $json.fromName }}! 👋\n\nThanks for your interest! Book a time that works for you:\n{{ $env.CALENDAR_BOOKING_LINK }}\n\nLooking forward to chatting!",
+        "options": {}
+      },
+      "id": "send-calendar-link",
+      "name": "Send Calendar Link SMS",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1650, 400],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $json.ghlContactId }}",
+        "updateFields": {
+          "tags": "not-interested,closed-lost",
+          "customFieldsUi": {
+            "customFieldsValues": [
+              {
+                "fieldId": "reply_intent",
+                "fieldValue": "not-interested"
+              },
+              {
+                "fieldId": "closed_date",
+                "fieldValue": "={{ $now.toISO() }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "update-ghl-closed",
+      "name": "Update GHL - Not Interested",
+      "type": "n8n-nodes-base.goHighLevel",
+      "typeVersion": 2,
+      "position": [1450, 550],
+      "credentials": {
+        "goHighLevelApi": {
+          "id": "ghl-api-key",
+          "name": "GoHighLevel API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all processing results\nconst replyData = $('Parse AI Analysis').first().json;\n\nconst summary = {\n  messageId: replyData.messageId,\n  email: replyData.email,\n  sentiment: replyData.analysis.sentiment,\n  intent: replyData.analysis.intent,\n  priority: replyData.analysis.priority,\n  action: 'processed',\n  timestamp: new Date().toISOString()\n};\n\nreturn [{ json: summary }];"
+      },
+      "id": "aggregate-results",
+      "name": "Aggregate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "content": "=## New Reply Processed 📧\n\n**From:** {{ $json.email }}\n**Sentiment:** {{ $json.sentiment }}\n**Intent:** {{ $json.intent }}\n**Priority:** {{ $json.priority }}\n\n*Timestamp: {{ $json.timestamp }}*",
+        "options": {
+          "channel": "#pipeline-notifications"
+        }
+      },
+      "id": "send-notification",
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [2050, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-webhook",
+          "name": "Slack Webhook"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Email Reply Webhook": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Response": {
+      "main": [
+        [
+          {
+            "node": "Normalize Reply Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Reply Data": {
+      "main": [
+        [
+          {
+            "node": "AI Sentiment Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Sentiment Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Route by Intent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Intent": {
+      "main": [
+        [
+          {
+            "node": "Update GHL - Interested",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update GHL - Needs Info",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update GHL - Book Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update GHL - Not Interested",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update GHL - Interested": {
+      "main": [
+        [
+          {
+            "node": "Trigger AI Receptionist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger AI Receptionist": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update GHL - Needs Info": {
+      "main": [
+        [
+          {
+            "node": "Add to Nurture Sequence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Nurture Sequence": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update GHL - Book Meeting": {
+      "main": [
+        [
+          {
+            "node": "Send Calendar Link SMS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Calendar Link SMS": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update GHL - Not Interested": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Results": {
+      "main": [
+        [
+          {
+            "node": "Send Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "reply-processing",
+      "id": "reply-tag"
+    },
+    {
+      "name": "ai-analysis",
+      "id": "ai-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-01-23T00:00:00.000Z",
+  "versionId": "1.0.0"
+}
