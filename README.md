@@ -26,7 +26,7 @@ The platform now includes **NEW AI-Powered Prospecting Automation** that uses GP
 4. **AI Receptionist** - 24/7 phone/SMS handling with natural language understanding
 5. **Calendar Booking** - Automated meeting scheduling and follow-ups
 6. **Workflow Automation** - n8n orchestration connecting all platforms
-7. **NEW: AI Prospecting Automation** - ChatGPT-powered company research and personalized email generation with HubSpot integration
+7. **AI Prospecting Automation** - ChatGPT-powered company research and personalized email generation with HubSpot integration
 
 ---
 
@@ -129,7 +129,7 @@ agency-pipeline/
 
 ## DOE Framework Integration
 
-This project follows **Nick Saraev's Directive Orchestration Execution (DOE) Framework**:
+This project follows **Directive Orchestration Execution (DOE) Framework**:
 
 - **Directives** (`.md` files in `directives/`) = Natural language instructions
 - **Executions** (code in `executions/`) = Deterministic implementations
