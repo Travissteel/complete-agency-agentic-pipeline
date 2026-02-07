@@ -12,7 +12,7 @@
 
 This project provides a complete AI-powered agency pipeline for 1-man agencies and sales teams serving B2B clients. It combines web scraping, cold email automation, CRM integration, AI agents, and workflow orchestration into a unified system.
 
-The platform now includes **NEW AI-Powered Prospecting Automation** that uses GPT-4 to research companies and generate personalized outreach emails, then automatically creates contacts in HubSpot with comprehensive notes and sequence enrollment.
+The platform now includes **AI-Powered Prospecting Automation** that uses Chat GPT to research companies and generate personalized outreach emails, then automatically creates contacts in CRM like HubSpot and Go High Level with comprehensive notes and sequence enrollment.
 
 **Built for:** Solo agencies, marketing teams, sales organizations, and B2B businesses seeking to scale personalized outreach without sacrificing quality.
 
@@ -22,7 +22,7 @@ The platform now includes **NEW AI-Powered Prospecting Automation** that uses GP
 
 1. **Lead Generation** - Automated web scraping using Apify
 2. **Cold Outreach** - Multi-channel email campaigns via Instantly/SmartLead
-3. **CRM Integration** - GoHighLevel for client management and white-label delivery
+3. **CRM Integration** - HubSpot and GoHighLevel for client management and white-label delivery
 4. **AI Receptionist** - 24/7 phone/SMS handling with natural language understanding
 5. **Calendar Booking** - Automated meeting scheduling and follow-ups
 6. **Workflow Automation** - n8n orchestration connecting all platforms
