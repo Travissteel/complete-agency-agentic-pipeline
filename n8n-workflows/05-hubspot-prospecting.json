@@ -1,0 +1,417 @@
+{
+  "name": "HubSpot Prospecting Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute",
+              "minute": 5
+            }
+          ]
+        },
+        "sheetId": {
+          "__rl": true,
+          "value": "={{$parameter[\"documentId\"]}}",
+          "mode": "id"
+        },
+        "options": {
+          "event": "rowAdded"
+        }
+      },
+      "id": "e5c0a3b0-4a5c-4d3e-8f7a-1b2c3d4e5f6a",
+      "name": "Google Sheets Trigger",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "1",
+          "name": "Google Sheets Account"
+        }
+      },
+      "notes": "Monitors Google Sheet for new company rows.\n\nExpected Columns:\n- Company Name\n- Website\n- Industry\n- Location\n- Contact First Name\n- Contact Last Name\n- Contact Email\n- Contact Job Title\n\nPolls every 5 minutes for new rows."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and format company data from Google Sheet row\nconst row = $input.item.json;\n\n// Validate required fields\nif (!row['Company Name'] || !row['Website']) {\n  throw new Error('Missing required fields: Company Name and Website are required');\n}\n\n// Format company data\nconst companyData = {\n  companyName: row['Company Name'],\n  website: row['Website'],\n  industry: row['Industry'] || '',\n  location: row['Location'] || '',\n  employeeCount: row['Employee Count'] ? parseInt(row['Employee Count']) : null,\n  linkedIn: row['LinkedIn URL'] || ''\n};\n\n// Validate website URL format\ntry {\n  new URL(companyData.website);\n} catch (e) {\n  throw new Error('Invalid website URL format');\n}\n\nconsole.log('[Prepare Company Data] Formatted:', companyData);\n\nreturn {\n  json: {\n    companyData,\n    originalRow: row,\n    rowId: $input.item.json.id || $input.item.json['Row Number']\n  }\n};"
+      },
+      "id": "a1b2c3d4-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "Prepare Company Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "notes": "Extracts and validates company data.\n\nValidation:\n- Company Name (required)\n- Website (required, valid URL)\n- Industry, Location (optional)\n\nOutputs formatted companyData object."
+    },
+    {
+      "parameters": {
+        "jsCode": "// AI Company Research using OpenAI\nconst OpenAI = require('openai');\n\n// Get company data from previous node\nconst { companyData } = $input.item.json;\n\n// Initialize OpenAI client\nconst openai = new OpenAI({\n  apiKey: process.env.OPENAI_API_KEY,\n});\n\n// Build research prompt\nconst prompt = `Generate a concise company research summary for prospecting purposes.\n\nCompany Information:\n- Name: ${companyData.companyName}\n- Website: ${companyData.website}\n- Industry: ${companyData.industry || 'Unknown'}\n${companyData.location ? `- Location: ${companyData.location}` : ''}\n${companyData.employeeCount ? `- Employee Count: ${companyData.employeeCount}` : ''}\n${companyData.linkedIn ? `- LinkedIn: ${companyData.linkedIn}` : ''}\n\nPlease provide a 150-250 word summary that includes:\n1. What the company does (1-2 sentences)\n2. Target market and customers\n3. Key differentiators or main services\n4. Relevant pain points or challenges they likely face (for prospecting context)\n\nFormat the response as a professional research summary suitable for sales intelligence.`;\n\ntry {\n  console.log('[AI Research] Calling OpenAI for:', companyData.companyName);\n  \n  const completion = await openai.chat.completions.create({\n    model: 'gpt-4-turbo-preview',\n    messages: [\n      {\n        role: 'system',\n        content: 'You are a business research analyst specializing in company intelligence for B2B sales prospecting. Provide accurate, concise, and actionable company summaries.',\n      },\n      {\n        role: 'user',\n        content: prompt,\n      },\n    ],\n    temperature: 0.7,\n    max_tokens: 500,\n  });\n\n  const research = completion.choices[0]?.message?.content?.trim();\n  \n  if (!research || research.length < 100) {\n    throw new Error('Invalid or empty research response');\n  }\n\n  console.log('[AI Research] Success. Tokens:', completion.usage.total_tokens);\n\n  return {\n    json: {\n      ...($input.item.json),\n      companyResearch: research,\n      tokensUsed: completion.usage.total_tokens,\n      researchStatus: 'success'\n    }\n  };\n\n} catch (error) {\n  console.error('[AI Research] Error:', error.message);\n  \n  // Generate fallback summary\n  const fallback = `${companyData.companyName} is a ${companyData.industry || 'company'} ${companyData.location ? `based in ${companyData.location}` : 'organization'} (${companyData.website}). As a ${companyData.industry || 'business'} entity, they likely serve clients in their sector with specialized services and solutions. Further research recommended to understand their specific offerings, target market, and competitive positioning. Key prospecting areas may include digital transformation, operational efficiency, and industry-specific challenges.`;\n  \n  return {\n    json: {\n      ...($input.item.json),\n      companyResearch: fallback,\n      researchStatus: 'fallback',\n      researchError: error.message\n    }\n  };\n}"
+      },
+      "id": "b2c3d4e5-6f7a-8b9c-0d1e-2f3a4b5c6d7e",
+      "name": "AI Company Research",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300],
+      "notes": "Uses OpenAI GPT-4 to generate company research.\n\nInput: companyData object\nOutput: 150-250 word research summary\n\nFallback: If API fails, generates basic summary.\n\nRequires: OPENAI_API_KEY environment variable"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.researchStatus}}",
+              "operation": "notEquals",
+              "value2": "success"
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+      "name": "Check Research Error",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300],
+      "notes": "Checks if research failed.\n\nIf research status is not 'success', routes to error handler.\n\nOtherwise continues to email generation."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and format contact data from sheet row\nconst data = $input.item.json;\nconst row = data.originalRow;\n\n// Validate contact email\nif (!row['Contact Email']) {\n  throw new Error('Contact Email is required');\n}\n\n// Validate email format\nconst emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\nif (!emailRegex.test(row['Contact Email'])) {\n  throw new Error('Invalid email format');\n}\n\n// Format contact data\nconst contactData = {\n  firstName: row['Contact First Name'] || '',\n  lastName: row['Contact Last Name'] || '',\n  email: row['Contact Email'],\n  jobTitle: row['Contact Job Title'] || '',\n  companyName: data.companyData.companyName,\n  industry: data.companyData.industry,\n  location: data.companyData.location,\n  phone: row['Contact Phone'] || '',\n  website: data.companyData.website\n};\n\nconsole.log('[Prepare Contact] Formatted:', contactData.email);\n\nreturn {\n  json: {\n    ...data,\n    contactData\n  }\n};"
+      },
+      "id": "d4e5f6a7-8b9c-0d1e-2f3a-4b5c6d7e8f9a",
+      "name": "Prepare Contact Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 200],
+      "notes": "Extracts and validates contact data.\n\nValidation:\n- Email (required, valid format)\n- First Name, Last Name, Job Title (optional)\n\nCombines with company research for email generation."
+    },
+    {
+      "parameters": {
+        "jsCode": "// AI Email Generation using OpenAI\nconst OpenAI = require('openai');\n\n// Get data from previous nodes\nconst { contactData, companyResearch } = $input.item.json;\n\n// Initialize OpenAI client\nconst openai = new OpenAI({\n  apiKey: process.env.OPENAI_API_KEY,\n});\n\n// Define 3 email approaches\nconst approaches = [\n  {\n    name: 'problem-solution',\n    instructions: `Use a problem/solution approach:\n- Start by identifying a specific challenge their company likely faces\n- Reference insights from the company research\n- Present your solution as the answer to that problem\n- Be direct and value-focused`\n  },\n  {\n    name: 'social-proof',\n    instructions: `Use a social proof/case study approach:\n- Open with a brief success story or statistic from similar clients\n- Make it relevant to their industry or situation\n- Show credibility through specific results\n- Connect the dots to how they could benefit`\n  },\n  {\n    name: 'question',\n    instructions: `Use a question/curiosity approach:\n- Start with a thought-provoking question about their business\n- Reference something specific from the company research\n- Create curiosity about your solution\n- Make them want to reply to learn more`\n  }\n];\n\n// Generate all 3 email variants\nconst emails = [];\n\nfor (const approach of approaches) {\n  try {\n    const prompt = `Generate a personalized outreach email for the following prospect:\n\nContact Information:\n- Name: ${contactData.firstName} ${contactData.lastName}\n- Job Title: ${contactData.jobTitle}\n- Company: ${contactData.companyName}\n- Industry: ${contactData.industry}\n- Location: ${contactData.location}\n\nCompany Research:\n${companyResearch}\n\nEmail Requirements:\n- Length: 100-150 words (body only, excluding subject line)\n- Tone: Professional but conversational, helpful not salesy\n- ${approach.instructions}\n- Include a specific call-to-action (15-minute call, quick question, etc.)\n- Reference specific details from the company research to show you did homework\n- Address ${contactData.firstName} by first name\n\nFormat your response as JSON with this exact structure:\n{\n  \"subject\": \"Your subject line here (under 60 characters)\",\n  \"body\": \"Your email body here (100-150 words)\"\n}\n\nImportant: Return ONLY valid JSON, no additional text or markdown formatting.`;\n\n    console.log(`[AI Email] Generating ${approach.name} variant...`);\n\n    const completion = await openai.chat.completions.create({\n      model: 'gpt-4-turbo-preview',\n      messages: [\n        {\n          role: 'system',\n          content: 'You are an expert B2B sales copywriter specializing in personalized cold email outreach. Write compelling, research-backed emails that get replies. Always return valid JSON format with subject and body fields.',\n        },\n        {\n          role: 'user',\n          content: prompt,\n        },\n      ],\n      temperature: 0.8,\n      max_tokens: 400,\n      response_format: { type: 'json_object' },\n    });\n\n    const emailData = JSON.parse(completion.choices[0]?.message?.content);\n    \n    emails.push({\n      subject: emailData.subject,\n      body: emailData.body,\n      approach: approach.name\n    });\n\n    console.log(`[AI Email] Success for ${approach.name}`);\n\n  } catch (error) {\n    console.error(`[AI Email] Error for ${approach.name}:`, error.message);\n    \n    // Fallback templates\n    const fallback = {\n      'problem-solution': {\n        subject: `Quick idea for ${contactData.companyName}`,\n        body: `Hi ${contactData.firstName},\\n\\nI was researching ${contactData.companyName} and noticed you're in the ${contactData.industry} space.\\n\\nMany companies in your industry struggle with scaling their client acquisition efficiently. We've helped similar agencies streamline their prospecting process and increase qualified leads by 40%.\\n\\nWould you be open to a quick 15-minute call to explore if this could work for ${contactData.companyName}?\\n\\nBest regards`\n      },\n      'social-proof': {\n        subject: `How we helped 3 agencies like ${contactData.companyName}`,\n        body: `Hi ${contactData.firstName},\\n\\nWe recently helped three agencies similar to ${contactData.companyName} increase their pipeline by 40% through automated prospecting.\\n\\nGiven your position in the ${contactData.industry} sector, I thought you might benefit from a similar approach.\\n\\nWould you be interested in a brief call to see if this could work for your team?\\n\\nBest regards`\n      },\n      'question': {\n        subject: `Question about ${contactData.companyName}'s growth strategy`,\n        body: `Hi ${contactData.firstName},\\n\\nI was researching ${contactData.companyName} and had a quick question about your client acquisition strategy.\\n\\nAs a ${contactData.industry} company, I'm curious about how you're currently handling prospecting at scale.\\n\\nWould you have 15 minutes for a quick conversation? I'd love to share what's working for similar agencies.\\n\\nBest regards`\n      }\n    };\n    \n    emails.push({\n      ...fallback[approach.name],\n      approach: approach.name,\n      fallback: true\n    });\n  }\n}\n\nreturn {\n  json: {\n    ...($input.item.json),\n    emails,\n    emailsGenerated: emails.length,\n    emailStatus: emails.every(e => !e.fallback) ? 'success' : 'partial'\n  }\n};"
+      },
+      "id": "e5f6a7b8-9c0d-1e2f-3a4b-5c6d7e8f9a0b",
+      "name": "AI Email Generation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 200],
+      "notes": "Generates 3 personalized email variants.\n\nApproaches:\n1. Problem-Solution\n2. Social Proof\n3. Question/Curiosity\n\nEach 100-150 words with unique subject line.\n\nFallback templates if AI fails.\n\nRequires: OPENAI_API_KEY environment variable"
+    },
+    {
+      "parameters": {
+        "jsCode": "// HubSpot Integration\nconst HubSpotClient = require('./hubspot-client.js');\n\n// Get data from previous nodes\nconst { contactData, emails, companyResearch, originalRow } = $input.item.json;\n\n// Initialize HubSpot client\nconst hubspot = new HubSpotClient(process.env.HUBSPOT_API_KEY);\n\ntry {\n  console.log('[HubSpot] Processing prospect:', contactData.email);\n\n  // Prepare prospect data\n  const prospectData = {\n    contact: contactData,\n    emails: emails,\n    companyResearch: companyResearch,\n    options: {\n      sequenceId: process.env.HUBSPOT_SEQUENCE_ID || originalRow['Sequence ID'] || null,\n      ownerId: process.env.HUBSPOT_OWNER_ID || originalRow['Owner ID'] || null\n    }\n  };\n\n  // Process complete workflow (create contact + add note + enroll in sequence)\n  const result = await hubspot.processProspect(prospectData);\n\n  console.log('[HubSpot] Success:', result.contactUrl);\n\n  return {\n    json: {\n      ...($input.item.json),\n      hubspotResult: result,\n      hubspotUrl: result.contactUrl,\n      hubspotContactId: result.contactId,\n      hubspotStatus: 'success',\n      sequenceEnrolled: result.sequenceEnrolled,\n      noteCreated: result.noteCreated\n    }\n  };\n\n} catch (error) {\n  console.error('[HubSpot] Error:', error.message);\n  \n  return {\n    json: {\n      ...($input.item.json),\n      hubspotStatus: 'error',\n      hubspotError: error.message,\n      hubspotUrl: null,\n      hubspotContactId: null\n    }\n  };\n}"
+      },
+      "id": "f6a7b8c9-0d1e-2f3a-4b5c-6d7e8f9a0b1c",
+      "name": "HubSpot Integration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 200],
+      "notes": "Processes prospect in HubSpot.\n\nSteps:\n1. Create/update contact\n2. Add note with research + emails\n3. Enroll in sequence (if ID provided)\n\nOutputs:\n- HubSpot contact URL\n- Contact ID\n- Success/error status\n\nRequires:\n- HUBSPOT_API_KEY\n- HUBSPOT_SEQUENCE_ID (optional)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.hubspotStatus}}",
+              "operation": "equals",
+              "value2": "success"
+            }
+          ]
+        }
+      },
+      "id": "a7b8c9d0-1e2f-3a4b-5c6d-7e8f9a0b1c2d",
+      "name": "Check HubSpot Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1780, 200],
+      "notes": "Routes to success or error path.\n\nSuccess: Update sheet with 'Completed' status\nError: Update sheet with 'Error' status"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{$json.documentId}}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{$json.sheetName}}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "Completed",
+            "HubSpot URL": "={{$json.hubspotUrl}}",
+            "Processed Date": "={{$now}}",
+            "Emails Generated": "={{$json.emailsGenerated}}",
+            "Sequence Enrolled": "={{$json.sequenceEnrolled ? 'Yes' : 'No'}}",
+            "Contact ID": "={{$json.hubspotContactId}}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "b8c9d0e1-2f3a-4b5c-6d7e-8f9a0b1c2d3e",
+      "name": "Update Sheet - Success",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2000, 100],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "1",
+          "name": "Google Sheets Account"
+        }
+      },
+      "notes": "Updates Google Sheet with success status.\n\nColumns Updated:\n- Status: 'Completed'\n- HubSpot URL\n- Processed Date\n- Emails Generated\n- Sequence Enrolled\n- Contact ID"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "={{$json.documentId}}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{$json.sheetName}}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "Error",
+            "Error Message": "={{$json.hubspotError || $json.researchError || 'Unknown error'}}",
+            "Processed Date": "={{$now}}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "c9d0e1f2-3a4b-5c6d-7e8f-9a0b1c2d3e4f",
+      "name": "Update Sheet - Error",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [2000, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "1",
+          "name": "Google Sheets Account"
+        }
+      },
+      "notes": "Updates Google Sheet with error status.\n\nColumns Updated:\n- Status: 'Error'\n- Error Message\n- Processed Date"
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "channel": {
+          "__rl": true,
+          "value": "={{$env.SLACK_CHANNEL}}",
+          "mode": "id"
+        },
+        "text": "=New prospect processed successfully!\n\n*Contact:* {{$json.contactData.firstName}} {{$json.contactData.lastName}}\n*Company:* {{$json.contactData.companyName}}\n*Email:* {{$json.contactData.email}}\n*HubSpot URL:* {{$json.hubspotUrl}}\n*Emails Generated:* {{$json.emailsGenerated}}\n*Sequence Enrolled:* {{$json.sequenceEnrolled ? 'Yes' : 'No'}}\n\nView in HubSpot: {{$json.hubspotUrl}}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "d0e1f2a3-4b5c-6d7e-8f9a-0b1c2d3e4f5a",
+      "name": "Slack Notification - Success",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [2220, 100],
+      "credentials": {
+        "slackWebhookApi": {
+          "id": "2",
+          "name": "Slack Webhook"
+        }
+      },
+      "notes": "Sends Slack notification on success.\n\nIncludes:\n- Contact name and email\n- Company name\n- HubSpot URL\n- Emails generated count\n- Sequence enrollment status\n\nRequires: SLACK_CHANNEL environment variable"
+    },
+    {
+      "parameters": {
+        "authentication": "webhook",
+        "channel": {
+          "__rl": true,
+          "value": "={{$env.SLACK_CHANNEL}}",
+          "mode": "id"
+        },
+        "text": "=Prospect processing failed!\n\n*Contact:* {{$json.contactData.firstName}} {{$json.contactData.lastName}}\n*Company:* {{$json.contactData.companyName}}\n*Email:* {{$json.contactData.email}}\n*Error:* {{$json.hubspotError || $json.researchError || 'Unknown error'}}\n\nPlease check the workflow and retry manually.",
+        "otherOptions": {
+          "includeLinkToWorkflow": true
+        }
+      },
+      "id": "e1f2a3b4-5c6d-7e8f-9a0b-1c2d3e4f5a6b",
+      "name": "Slack Notification - Error",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [2220, 300],
+      "credentials": {
+        "slackWebhookApi": {
+          "id": "2",
+          "name": "Slack Webhook"
+        }
+      },
+      "notes": "Sends Slack notification on error.\n\nIncludes:\n- Contact details\n- Error message\n- Link to workflow for debugging\n\nRequires: SLACK_CHANNEL environment variable"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log error for debugging\nconst data = $input.item.json;\n\nconsole.error('[Error Handler] Research failed for:', data.companyData?.companyName);\nconsole.error('[Error Handler] Error:', data.researchError);\n\nreturn {\n  json: {\n    ...data,\n    finalStatus: 'error',\n    errorStep: 'research'\n  }\n};"
+      },
+      "id": "f2a3b4c5-6d7e-8f9a-0b1c-2d3e4f5a6b7c",
+      "name": "Log Research Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 400],
+      "notes": "Logs research errors for debugging.\n\nMarks final status as 'error'.\n\nRoutes to sheet update with error status."
+    }
+  ],
+  "connections": {
+    "Google Sheets Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare Company Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Company Data": {
+      "main": [
+        [
+          {
+            "node": "AI Company Research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Company Research": {
+      "main": [
+        [
+          {
+            "node": "Check Research Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Research Error": {
+      "main": [
+        [
+          {
+            "node": "Log Research Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Contact Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Contact Data": {
+      "main": [
+        [
+          {
+            "node": "AI Email Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Email Generation": {
+      "main": [
+        [
+          {
+            "node": "HubSpot Integration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot Integration": {
+      "main": [
+        [
+          {
+            "node": "Check HubSpot Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check HubSpot Success": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet - Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update Sheet - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet - Success": {
+      "main": [
+        [
+          {
+            "node": "Slack Notification - Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet - Error": {
+      "main": [
+        [
+          {
+            "node": "Slack Notification - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Research Error": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet - Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-02-07T12:00:00.000Z",
+  "versionId": "1.0.0"
+}

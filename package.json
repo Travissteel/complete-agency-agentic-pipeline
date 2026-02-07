@@ -1,0 +1,24 @@
+{
+  "name": "agency-pipeline",
+  "version": "1.0.0",
+  "description": "AI-powered agency prospecting and sales pipeline tools",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/company-research.test.js"
+  },
+  "keywords": [
+    "ai",
+    "sales",
+    "prospecting",
+    "openai",
+    "agency"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "openai": "^4.63.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
